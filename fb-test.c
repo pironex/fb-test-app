@@ -36,9 +36,56 @@
 
 static struct fb_info fb_info;
 
+/*
+R7	23	B0	0
+R6	22	G0	8
+R5	21	R0	16
+R4	20	B1	1
+R3	19	G1	9
+R2	18	R1	17
+R1	17	B2	2
+R0	16	R2	18
+G7	15	B7	7
+G6	14	B6	6
+G5	13	B5	5
+G4	12	B4	4
+G3	11	B3	3
+G2	10	G7	15
+G1	9	G6	14
+G0	8	G5	13
+B7	7	G4	12
+B6	6	G3	11
+B5	5	G2	10
+B4	4	R7	23
+B3	3	R6	22
+B2	2	R5	21
+B1	1	R4	20
+B0	0	R3	19
+*/
+unsigned char SFFIX[24] = {
+	19, 20, 21, 22, 23, 10, 11, 12,
+	13, 14, 15,  3,  4,  5,  6,  7,
+	18,  2, 17,  9,  1, 16,  8,  0,
+};
+
+static inline unsigned fix_color(unsigned old)
+{
+	unsigned n = 0;
+	for (unsigned i = 0; i < 24; ++i) {
+		n |= (((old >> i) & 0x0000001) << SFFIX[i]);
+	}
+	//printf("o %06x n %06x\n", old, n);
+	return n;
+}
+
+static int SF_FIX = 1;
+
 static void draw_pixel(struct fb_info *fb_info, int x, int y, unsigned color)
 {
 	void *fbmem;
+
+	if (SF_FIX == 1)
+		color = fix_color(color);
 
 	fbmem = fb_info->ptr;
 	if (fb_info->var.bits_per_pixel == 8) {
@@ -185,6 +232,42 @@ static void do_fill_screen(struct fb_info *fb_info, int pattern)
 	}
 }
 
+//#define BOX (150)
+static void draw_color_boxes(struct fb_info *fb_info, int add)
+{
+	unsigned ySize = fb_info->var.yres / 3;
+	unsigned xSize = fb_info->var.xres / 8;
+	unsigned BOX = (xSize < ySize) ? xSize : ySize;
+	unsigned BOXX = xSize;
+	unsigned BOXY = ySize;
+	unsigned c = 0, cb = 0;
+	unsigned tc = (add == 2 ? 0 : 0xffffff );
+	unsigned px, py;
+	char text[32];
+	fill_screen_solid(fb_info, 0);
+	for (int rgb = 0; rgb < 3; rgb++) {
+		if (add < 2)
+			cb = 0;
+		for (int s = 0; s < 8; s++) {
+			c = (0x00800000 >> ((rgb * 8) + s));
+			//c = (0x00000001 << ((rgb * 8) + s));
+			cb = (add > 0) ? (cb | c) : c;
+			printf("R%d, S%d, x%d, y%d. C%08x\n", rgb, s, BOX * s, BOX * rgb, c);
+			for (int y = 0; y < BOXY; y++) {
+				py = (rgb * BOXY) + y;
+				for (int x = 0; x < BOXX; x++) {
+					px = (s * BOXX) + x;
+					draw_pixel(fb_info, px, py , cb);
+				}
+			}
+			snprintf(text, 7, "%06x", cb /* (cb >> (8 * (2 -rgb))) */);
+			fb_put_string(fb_info, s * BOXX + 10, rgb * BOXY + 20, text, 10, tc, 0, 0);
+		}
+		snprintf(text, 10, "%s", (rgb == 0 ? "red" : rgb == 1 ? "green" : "blue"));
+		fb_put_string(fb_info, 10, rgb * BOXY + 10, text, 10, tc, 0, 0);
+	}
+}
+
 void show_help(void)
 {
 	printf("Usage: fb-test -f fbnum -r -g -b -w -p pattern\n");
@@ -201,11 +284,15 @@ int main(int argc, char **argv)
 	int opt;
 	int req_fb = 0;
 	int req_pattern = 0;
+	int special_color = 0;
 
+	if (getenv("NO_SF_FIX") != 0) {
+		SF_FIX = 0;
+	}
 	printf("fb-test %d.%d.%d (%s)\n", VERSION, PATCHLEVEL, SUBLEVEL,
 		VERSION_NAME);
 
-	while ((opt = getopt(argc, argv, "hrgbwp:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "hrgbwup:s:f:t:")) != -1) {
 		switch (opt) {
 		case 'f':
 			req_fb = atoi(optarg);
@@ -225,6 +312,14 @@ int main(int argc, char **argv)
 		case 'w':
 			req_pattern = 4;
 			break;
+		case 's':
+			special_color = strtoul(optarg, NULL, 0);
+			req_pattern = -1;
+			break;
+		case 't':
+			req_pattern = -2;
+			special_color = strtoul(optarg, NULL, 0);
+			break;
 		case 'h':
 			show_help();
 			return 0;
@@ -234,8 +329,15 @@ int main(int argc, char **argv)
 	}
 
 	fb_open(req_fb, &fb_info);
-
-	do_fill_screen(&fb_info, req_pattern);
+	if (req_pattern == -1) {
+		printf("Filling screen with RGB: 0x%08x\n", special_color);
+		fill_screen_solid(&fb_info, (unsigned int)special_color);
+		//fb_put_string(&fb_info, 100, 100, "FILL", 200, 0xffffff, 0, 0);
+	} else if (req_pattern == -2) {
+		draw_color_boxes(&fb_info, special_color);
+	} else {
+		do_fill_screen(&fb_info, req_pattern);
+	}
 
 	return 0;
 }
